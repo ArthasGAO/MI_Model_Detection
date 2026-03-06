@@ -87,7 +87,7 @@ def main(seed, r, yaml_file_path): # this method is made for CNN normal training
     test_set =  exp_setup["Dataset"].test_set
 
     # 25000 vs. 250000 （50000）
-    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/',
+    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml["Dataset"]["name"]}/',
                                                   group_size=exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], seed=42, force_rebuild=False)
     train_subset1 =  exp_setup["Dataset"].subset("train", group_A, clean=False) # with augmentation
     
@@ -238,10 +238,10 @@ def main_overlap(seed, r, yaml_file_path): # this method is made for CNN normal 
     test_set =  exp_setup["Dataset"].test_set
 
     # 25000 vs. 250000 （50000）exp_setup["GroupSize"]
-    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/',
+    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml["Dataset"]["name"]}/',
                                                   group_size=exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], seed=42, force_rebuild=False)
 
-    group_B = create_or_load_group_B(dataset=train_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/', group_A_indices=group_A,
+    group_B = create_or_load_group_B(dataset=train_set, save_dir=f'./Indices/{exp_yaml["Dataset"]["name"]}/', group_A_indices=group_A,
                                      group_size = exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], 
                                      overlap_rate=r, seed=42, force_rebuild=False)
     
@@ -319,7 +319,7 @@ def main_deit(seed, r, yaml_file_path): # this method is made for the DeiT Model
     test_set =  exp_setup["Dataset"].test_set
 
     # Prepare class balanced training subset
-    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/',
+    group_A = create_or_load_group_A(dataset=train_set, save_dir=f'./Indices/{exp_yaml["Dataset"]["name"]}/',
                                                   group_size=exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], seed=42, force_rebuild=False)
     train_subset1 =  exp_setup["Dataset"].subset("train", group_A, clean=False)
     
