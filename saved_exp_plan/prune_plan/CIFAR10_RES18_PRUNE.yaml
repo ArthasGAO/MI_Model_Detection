@@ -1,0 +1,41 @@
+# ======================================================
+# Experiment Configuration: CIFAR-10 + ResNet-18 (SGD + Cosine LR) + restoring fine-tuning (optional)
+# ======================================================
+
+Dataset: CIFAR-10
+Model: ResNet-18
+Flag: True # represents do we need to do the restoring ft process
+
+Optimizers:
+  - name: SGD
+    sparsity: 0.2
+    params:
+      lr: 0.01
+      momentum: 0.9
+      weight_decay: 0.0005
+    Epochs: 20
+
+  - name: SGD
+    sparsity: 0.6
+    params:
+      lr: 0.003
+      momentum: 0.9
+      weight_decay: 0.0005
+    Epochs: 35
+
+  - name: SGD
+    sparsity: 0.8
+    params:
+      lr: 0.0005
+      momentum: 0.9
+      weight_decay: 0.0005
+    Epochs: 50
+
+
+Scheduler:
+  name: CosineAnnealingLR
+  params:
+    T_max: auto # <-- dynamic: same as the epochs set for this strategy
+    eta_min: 0.0001
+
+BatchSize: 128

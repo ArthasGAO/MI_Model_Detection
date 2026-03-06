@@ -1,0 +1,40 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# ==========================================
+# 1. Base Distiller Class
+# ==========================================
+class Distiller(nn.Module):
+    def __init__(self, student, teacher):
+        super(Distiller, self).__init__()
+        self.student = student
+        self.teacher = teacher
+
+    def train(self, mode=True):
+        """
+        Crucial Override: Ensures the teacher ALWAYS stays in eval mode,
+        even when you call distiller.train() in your main loop.
+        """
+        if not isinstance(mode, bool):
+            raise ValueError("training mode is expected to be boolean")
+        self.training = mode
+        for module in self.children():
+            module.train(mode)
+        self.teacher.eval() # Force teacher to eval
+        return self
+
+    def get_learnable_parameters(self):
+        return [v for k, v in self.student.named_parameters()]
+
+    def forward_train(self, **kwargs):
+        raise NotImplementedError()
+
+    def forward_test(self, image):
+        # Only use the student for testing/inference
+        return self.student(image)[0] 
+
+    def forward(self, **kwargs):
+        if self.training:
+            return self.forward_train(**kwargs)
+        return self.forward_test(kwargs["image"])
