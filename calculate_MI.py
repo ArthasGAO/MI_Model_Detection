@@ -147,7 +147,7 @@ def main_nega(seed, r, yaml_file_path): # this function is used to calculate the
     exp_setup = process_experiment_setup(exp_yaml) 
 
     print('==> Loading model..')
-    model_name = exp_yaml["Scenario_Name"] + f"_{seed}_{r}"
+    model_name = exp_yaml["Scenario_Name"] + f"_{seed}_{round(r,2)}"
     model_dir = './saved_models/vanilla/'
     model_folder = Path(model_dir)/model_name
 
@@ -449,17 +449,18 @@ if __name__ == "__main__":
             for num in range(5000, 25001, 5000):
                 main_nega(seed, num, yaml_path)'''
             
-        '''for seed in range(43, 52): # entry point for main_nega
+        for seed in range(42, 52): # entry point for main_nega
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
 
-            main_nega(seed, 1.0, yaml_path)
+            for frac in np.arange(0.0, 1.1, 0.1):
+                main_nega(seed, frac, yaml_path)
             #main_deit(seed, 1.0, yaml_path)'''
             
-        for seed in range(42, 52): # entry point for main_nega
+        '''for seed in range(42, 52): # entry point for main_nega
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
 
             for frac in np.arange(0.1, 1.0, 0.1):
                 #main_nega_overlapping(seed, frac, yaml_path)
-                main_deit_overlapping(seed, 1.0, yaml_path)
+                main_deit_overlapping(seed, frac, yaml_path)'''

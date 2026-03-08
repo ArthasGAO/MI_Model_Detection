@@ -394,7 +394,7 @@ if __name__ == "__main__":
     for yaml_path in yaml_files:
         print(f"\n========== Starting experiments from {yaml_path} ==========")
 
-        for seed in range(42, 52):
+        for seed in range(45, 52):
             for rate in np.linspace(0,1,11): #overlapping rate: [0, 0.1, 0.2, 0.3,...,0.9, 1]
                 print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
                 set_seed(seed)
