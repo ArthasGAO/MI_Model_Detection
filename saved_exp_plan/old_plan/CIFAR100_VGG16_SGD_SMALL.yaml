@@ -9,6 +9,7 @@ Dataset:
     - {name: RandomHorizontalFlip, params: {p: 0.5}}
     - {name: ToTensor}
     - {name: Normalize}
+    #- {name: RandomErasing, params: {p: 0.25, scale: [0.02, 0.2], ratio: [0.3, 3.3]}}
   test_transforms:
     - {name: ToTensor}
     - {name: Normalize}
@@ -21,14 +22,14 @@ Optimizer:
   params:
     lr: 0.1 #0.05
     momentum: 0.9
-    weight_decay: 0.001 # 0.0005
+    weight_decay: 0.0005 # 0.0005
     nesterov: True
 
 Scheduler:
   name: CosineAnnealingLR
   params:
-    T_max: 320    # assumes per-epoch stepping
+    T_max: 400   # assumes per-epoch stepping
     eta_min: 0.000001
 
-Epochs: 320
+Epochs: 400
 BatchSize: 128

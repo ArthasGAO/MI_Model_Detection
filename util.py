@@ -1312,6 +1312,44 @@ def create_or_load_group_A(
     return group_A
 
 
+def create_or_load_subset_from_group(
+    dataset,
+    group_A,
+    save_dir,
+    subset_size=10000,
+    num_classes=10,
+    seed=42,
+    force_rebuild=False
+):
+    save_path = Path(save_dir + f"/group_A_subset_{subset_size}_from_{len(group_A)}_seed{seed}.npy")
+
+    if save_path.exists() and not force_rebuild:
+        print(f"[INFO] Loading subset from {save_path}")
+        return load_indices(save_path)
+
+    print("[INFO] Creating new balanced subset from Group A")
+
+    rng = np.random.default_rng(seed)
+    n_per_class = subset_size // num_classes
+
+    # Build class-to-indices mapping using only group_A indices
+    class_to_indices = {}
+    for idx in group_A:
+        _, y = dataset[idx]
+        class_to_indices.setdefault(y, []).append(idx)
+
+    subset = []
+    for c in range(num_classes):
+        indices = np.array(class_to_indices[c])
+        rng.shuffle(indices)
+        subset.extend(indices[:n_per_class])
+
+    rng.shuffle(subset)
+    save_indices(subset, save_path)
+    return subset
+
+
+
 def create_or_load_group_B(
     save_dir=None,
     overlap_rate=None,

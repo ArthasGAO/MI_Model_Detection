@@ -102,7 +102,7 @@ def main(seed, r, yaml_file_path): # this method is made for CNN normal training
     print('==> Building model..')
     # load experiment information
     net = exp_setup["Model"].to(device) # load model 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss() # label_smoothing=0.1
     optimizer = exp_setup["Optimizer"]
     scheduler = exp_setup["Scheduler"]
 
@@ -210,7 +210,7 @@ def main_mix(seed, r, yaml_file_path): # Use mixup/cutmix for CIFAR-100 small sa
     torch.save(net.state_dict(), f'./saved_models/normal_nega/{scenario_name}/epoch_{epoch}.pth') 
 
 
-def main_overlap(seed, r, yaml_file_path): # this method is made for CNN normal training.
+def main_overlap(seed, r, yaml_file_path): # this method is made for CNN normal training with different overlapping rate of training data.
     print(device)
     start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
@@ -394,19 +394,19 @@ if __name__ == "__main__":
     for yaml_path in yaml_files:
         print(f"\n========== Starting experiments from {yaml_path} ==========")
 
-        for seed in range(45, 52):
+        '''for seed in range(42, 52):
             for rate in np.linspace(0,1,11): #overlapping rate: [0, 0.1, 0.2, 0.3,...,0.9, 1]
                 print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
                 set_seed(seed)
 
-                main_overlap(seed, rate, yaml_path)
+                main_overlap(seed, rate, yaml_path)'''
 
-        '''for seed in range(42, 43): 
+        for seed in range(42, 43): 
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
 
             #main_deit(seed, 1.0, yaml_path)    
-            main(seed, 1.0, yaml_path)'''
+            main(seed, 1.0, yaml_path)
             
             #
         '''for num in range(5000, 25001, 5000):
