@@ -13,7 +13,7 @@ import torch.optim as optim
 from torch.utils.data import Subset, DataLoader
 import torchvision
 import torchvision.transforms as transforms
-from util import process_yaml_file, process_experiment_ft_setup, create_train_subset, evaluate2, prepare_group_subset,\
+from util import create_or_load_subset_from_group, process_yaml_file, process_experiment_ft_setup, create_train_subset, evaluate2, prepare_group_subset,\
                  load_last_checkpoint, load_checkpoint_from_epoch, build_epoch_to_ckpt_map, create_or_load_group_A
 
 # =====================================================
@@ -49,30 +49,26 @@ STRATEGY = ['FT-LL', 'FT-AL']#, 'RT-AL']
 # =====================================================
 # 3. Main training logic
 # =====================================================
-def main(seed1, seed2, yaml_file_path): 
+def main(seed, r, yaml_file_path): 
     print(device)
 
     exp_yaml = process_yaml_file(yaml_file_path)
     exp_setup = process_experiment_ft_setup(exp_yaml)
 
     g = torch.Generator()
-    g.manual_seed(seed2)
+    g.manual_seed(seed)
 
     print('==> Preparing data..')
-    train_set = exp_setup["Dataset"].train_set
-    test_set =  exp_setup["Dataset"].test_set
     in_sample_set = exp_setup["Dataset"].in_sample_set # No data augmentation here
-    # each run is saved in its own folder, e.g. ./saved_models/CIFAR-10_ResNet-18_45/
+    out_sample_set =  exp_setup["Dataset"].test_set
+    #train_set = exp_setup["Dataset"].train_set
+    
+    # Important: the in sample evaluation set should be the same each round
+    group_A = create_or_load_group_A(dataset=in_sample_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/',
+                                                  group_size=exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], seed=42, force_rebuild=False)
+    in_sample_subset = exp_setup["Dataset"].subset("train", group_A, clean=True)
 
-    # 40000 vs. 10000 （50000）
-    train_subset, _ = create_train_subset(train_set, 40000, seed2) # with data augmentation
-    in_sample_subset, _  = create_train_subset(in_sample_set, 40000, seed2)
-
-    trainloader = DataLoader(train_subset, batch_size=128, shuffle=False, num_workers=8, # in sample with augmentation
-                    worker_init_fn=seed_worker,generator=g, persistent_workers=True, 
-                    pin_memory=True)
-
-    testloader = DataLoader(test_set,batch_size=128,shuffle=False,num_workers=8, # out sample
+    in_sample_loader = DataLoader(in_sample_subset,batch_size=128,shuffle=False,num_workers=8, # in sample without augmentation
                 worker_init_fn=seed_worker,generator=g, persistent_workers=True, 
                 pin_memory=True)
     
@@ -81,9 +77,9 @@ def main(seed1, seed2, yaml_file_path):
                 pin_memory=True)
 
     for strategy in STRATEGY:
-        model_name = f"{exp_yaml['Dataset']}_{exp_yaml['Model']}_{seed1}_{strategy}"
+        model_name = exp_yaml["Scenario_Name"] + f"_{seed}_{round(r,2)}" + f"_{strategy}"
         print(model_name)
-        model_dir = './saved_models/fine_tune_new/'
+        model_dir = './saved_models/ft_vanilla/'
         model_folder = Path(model_dir)/model_name
 
         ckpt_path = load_last_checkpoint(model_folder)
@@ -94,9 +90,9 @@ def main(seed1, seed2, yaml_file_path):
         state = torch.load(ckpt_path, map_location=device)
         net.load_state_dict(state)
 
-        log_dir = './saved_logs/fine_tune_new/MI'
+        log_dir = './saved_logs/ft_vanilla/MI'
         os.makedirs(log_dir, exist_ok=True)
-        log_name = model_name + f"_{seed2}"
+        log_name = model_name
         log_file = os.path.join(log_dir, f"training_log_{log_name}_MI.csv")
 
         if not os.path.exists(log_file):
@@ -105,20 +101,84 @@ def main(seed1, seed2, yaml_file_path):
                 writer.writerow(['Scenario','Epoch','I(X;T)-InAug', 'I(T;Y)-InAug', 'I(X;T)-In', 'I(T;Y)-In','I(X;T)-Out', 'I(T;Y)-Out']) #,
 
         # Evaluation loop
-
-        print(f"This is the {seed1} round on {seed2} base 99 epoch!") # here we only consider calculating the last epoch's metric
-        value_xt_inAug, value_ty_inAug = evaluate2(net, trainloader, device)
         value_xt_in, value_ty_in = evaluate2(net, in_sample_loader, device)
-        value_xt_out, value_ty_out = evaluate2(net, testloader, device)
-        #scheduler.step()
 
         with open(log_file, 'a', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([log_name, 99,
-                                value_xt_inAug, value_ty_inAug,
+                                0, 0,
                                 value_xt_in, value_ty_in,
-                                value_xt_out, value_ty_out
+                                0, 0
                                 ])
+            
+def main_10000(seed, r, yaml_file_path): 
+    print(device)
+
+    exp_yaml = process_yaml_file(yaml_file_path)
+    exp_setup = process_experiment_ft_setup(exp_yaml)
+
+    g = torch.Generator()
+    g.manual_seed(seed)
+
+    print('==> Preparing data..')
+    in_sample_set = exp_setup["Dataset"].in_sample_set # No data augmentation here
+    out_sample_set =  exp_setup["Dataset"].test_set
+    #train_set = exp_setup["Dataset"].train_set
+    
+    # Important: the in sample evaluation set should be the same each round
+    group_A = create_or_load_group_A(dataset=in_sample_set, save_dir=f'./Indices/{exp_yaml['Dataset']['name']}/',
+                                                  group_size=exp_setup["GroupSize"], num_classes=exp_setup["NumClasses"], seed=42, force_rebuild=False)
+    subset_A = create_or_load_subset_from_group(
+                dataset=in_sample_set,
+                group_A=group_A,
+                save_dir=f'./Indices/{exp_yaml["Dataset"]["name"]}/',
+                subset_size=10000,
+                num_classes=exp_setup["NumClasses"],
+                seed=42,
+                force_rebuild=False
+            )
+    
+    in_sample_subset = exp_setup["Dataset"].subset("train", subset_A, clean=True)
+
+    in_sample_loader = DataLoader(in_sample_subset,batch_size=128,shuffle=False,num_workers=8, # in sample without augmentation
+                worker_init_fn=seed_worker,generator=g, persistent_workers=True, 
+                pin_memory=True)
+
+    for strategy in STRATEGY:
+        model_name = exp_yaml["Scenario_Name"] + f"_{seed}_{round(r,2)}" + f"_{strategy}"
+        print(model_name)
+        model_dir = './saved_models/ft_vanilla/'
+        model_folder = Path(model_dir)/model_name
+
+        ckpt_path = load_last_checkpoint(model_folder)
+        if ckpt_path is None:
+            print(f"[⚠️] No .pth files found in {model_folder}")
+
+        net = exp_setup["Model"].to(device) # load model
+        state = torch.load(ckpt_path, map_location=device)
+        net.load_state_dict(state)
+
+        log_dir = './saved_logs/ft_vanilla/MI'
+        os.makedirs(log_dir, exist_ok=True)
+        log_name = model_name + "_10000"
+        log_file = os.path.join(log_dir, f"training_log_{log_name}_MI.csv")
+
+        if not os.path.exists(log_file):
+            with open(log_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['Scenario','Epoch','I(X;T)-InAug', 'I(T;Y)-InAug', 'I(X;T)-In', 'I(T;Y)-In','I(X;T)-Out', 'I(T;Y)-Out']) #,
+
+        # Evaluation loop
+        value_xt_in, value_ty_in = evaluate2(net, in_sample_loader, device)
+
+        with open(log_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([log_name, 99,
+                                0, 0,
+                                value_xt_in, value_ty_in,
+                                0, 0
+                                ])
+
 
 def main_new_one_epoch(seed, r, yaml_file_path): # use last epoch from fine-tuning
     print(device)
@@ -283,4 +343,4 @@ if __name__ == "__main__":
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
         
-            main_new_multiple_epochs(seed, 1.0, yaml_path)
+            main_10000(seed, 1.0, yaml_path)

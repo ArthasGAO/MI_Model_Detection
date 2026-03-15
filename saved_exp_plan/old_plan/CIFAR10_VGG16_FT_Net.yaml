@@ -1,8 +1,8 @@
 # ======================================================
-# Experiment Configuration: CIFAR-10 + ResNet-18 (SGD + Cosine LR) + restoring fine-tuning (optional)
+# Experiment Configuration: CIFAR-10 + VGG16 (SGD + Cosine LR) + fine-tuning (in a CIFARNET subset)
 # ======================================================
-Model_Name: CIFAR-10_ResNet-18_40000 # this is used to load the trained model
-Scenario_Name: CIFAR-10_ResNet-18_40000_CIFARNet_10000
+Model_Name: CIFAR-10_VGG16_40000 # this is used to load the trained model
+Scenario_Name: CIFAR-10_VGG16_40000_CIFARNet_10000
 
 Dataset:
   name: CIFAR-10
@@ -33,38 +33,32 @@ FT_Dataset:
   group_size: 10000 #this represents the data size used for fine_tuning
   note: different
 
-Model: ResNet-18
+Model: VGG16
 
 Optimizers:
   - name: SGD
-    sparsity: 0.2
+    strategy: FT-LL
     params:
       lr: 0.01
       momentum: 0.9
       weight_decay: 0.0005
-    Epochs: 20
+      nesterov: true
+    Epochs: 15
 
   - name: SGD
-    sparsity: 0.4
+    strategy: FT-AL
     params:
-      lr: 0.003
+      lr: 0.001
       momentum: 0.9
       weight_decay: 0.0005
+      nesterov: true
     Epochs: 35
-
-  - name: SGD
-    sparsity: 0.6
-    params:
-      lr: 0.0005
-      momentum: 0.9
-      weight_decay: 0.0005
-    Epochs: 50
 
 
 Scheduler:
   name: CosineAnnealingLR
   params:
     T_max: auto # <-- dynamic: same as the epochs set for this strategy
-    eta_min: 0.0001
+    eta_min: 0.00001
 
 BatchSize: 128

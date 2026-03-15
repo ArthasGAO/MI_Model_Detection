@@ -20,7 +20,7 @@ Dataset:
 
 FT_Dataset:
   name: PseudoLabelCIFAR-10
-  normalization: custom
+  normalization: cifar10
   img_size: 32
   train_transforms:
     - {name: RandomCrop, params: {size: 32, padding: 4}}
@@ -42,6 +42,7 @@ Optimizers:
       lr: 0.01
       momentum: 0.9
       weight_decay: 0.0005
+      nesterov: true
     Epochs: 15
 
   - name: SGD
@@ -50,7 +51,8 @@ Optimizers:
       lr: 0.001
       momentum: 0.9
       weight_decay: 0.0005
-    Epochs: 25
+      nesterov: true
+    Epochs: 20
 
 
 Scheduler:

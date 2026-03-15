@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 import torchvision
 import torchvision.transforms as transforms
 from sklearn.metrics import precision_score
-from Dataset.CIFAR_10 import CIFAR10Dataset, CIFAR10PseudoLabelDataset
+from Dataset.CIFAR_10 import CIFAR10Dataset, CIFAR10PseudoLabelDataset, CIFARNetDataset
 from Dataset.CIFAR_100 import CIFAR100Dataset
 from Dataset.MNIST import MNISTDataset
 import torch.nn.functional as F
@@ -146,6 +146,15 @@ def build_dataset_from_yaml(ds_cfg):
         )
         num_classes = 10
         
+    elif ds_name == "CIFARNet":
+        ds_obj = CIFARNetDataset(
+            normalization=normalization,       # Keeps victim CIFAR-10 stats
+            img_size=img_size,                 # Triggers the 64x64 -> 32x32 downsample
+            train_transforms=train_tf_specs,
+            test_transforms=test_tf_specs,
+        )
+        num_classes = 10
+        
     else:
         return None, None, group_size
 
@@ -239,7 +248,7 @@ def process_experiment_ft_setup(data):
     result["GroupSize"] = group_size
 
     # -----------------------------
-    # Dataset setup (now supports YAML-driven transforms)
+    # FT Dataset setup (now supports YAML-driven transforms)
     # -----------------------------
     result["FT_Dataset"] = None
     ft_data_cfg = data.get("FT_Dataset")
@@ -313,9 +322,11 @@ def process_experiment_prune_setup(data):
     # -----------------------------
     # Dataset setup (now supports YAML-driven transforms)
     # -----------------------------
-    dataset_obj, num_classes = build_dataset_from_yaml(data)
+    ds_cfg = data.get("Dataset")
+    dataset_obj, num_classes, group_size = build_dataset_from_yaml(ds_cfg)
     result["Dataset"] = dataset_obj
     result["NumClasses"] = num_classes
+    result["GroupSize"] = group_size
 
     # -----------------------------
     # Model setup
@@ -331,46 +342,55 @@ def process_experiment_prune_setup(data):
         raise ValueError(f"Unsupported model: {model_name}")
     result["Model"] = model
 
+    result["FT_Dataset"] = None
+    ft_data_cfg = data.get("FT_Dataset")
+    if ft_data_cfg:
+        dataset_obj, num_classes, group_size = build_dataset_from_yaml(ft_data_cfg)
+        result["FT_Dataset"] = dataset_obj
+        result["FT_NumClasses"] = num_classes
+        result["FT_GroupSize"] = group_size
+        print(result["FT_GroupSize"])
+
     # -----------------------------
     # Optimizer setup
     # -----------------------------
-    result["DoRestoreFT"] = bool(data.get("Flag", False))
-    optimizer_cfg_list = data.get("Optimizers", [])
-    scheduler_cfg = data.get("Scheduler", None)
+    if ft_data_cfg:
+        optimizer_cfg_list = data.get("Optimizers", [])
+        scheduler_cfg = data.get("Scheduler", None)
 
-    for opt_cfg in optimizer_cfg_list:
-        optimizer_name = opt_cfg.get("name", "Adam")
-        print(optimizer_name)
-        sparsity = float(opt_cfg["sparsity"])
-        print(sparsity)
-        optimizer_params = opt_cfg.get("params", {})
-        print(optimizer_params)
-        epochs = opt_cfg.get("Epochs", 100)
-        print(epochs)
+        for opt_cfg in optimizer_cfg_list:
+            optimizer_name = opt_cfg.get("name", "Adam")
+            print(optimizer_name)
+            sparsity = float(opt_cfg["sparsity"])
+            print(sparsity)
+            optimizer_params = opt_cfg.get("params", {})
+            print(optimizer_params)
+            epochs = opt_cfg.get("Epochs", 100)
+            print(epochs)
 
-        optimizer_class = getattr(optim, optimizer_name)
-        optimizer = optimizer_class(model.parameters(), **optimizer_params)
+            optimizer_class = getattr(optim, optimizer_name)
+            optimizer = optimizer_class(model.parameters(), **optimizer_params)
 
-        scheduler = None
-        if scheduler_cfg:
-            scheduler_name = scheduler_cfg["name"]
-            scheduler_params = scheduler_cfg.get("params", {}).copy()
+            scheduler = None
+            if scheduler_cfg:
+                scheduler_name = scheduler_cfg["name"]
+                scheduler_params = scheduler_cfg.get("params", {}).copy()
 
-            # Dynamic T_max if needed
-            if scheduler_params.get("T_max") == "auto":
-                scheduler_params["T_max"] = epochs
+                # Dynamic T_max if needed
+                if scheduler_params.get("T_max") == "auto":
+                    scheduler_params["T_max"] = epochs
 
-            scheduler_class = getattr(lr_sched, scheduler_name)
-            scheduler = scheduler_class(optimizer, **scheduler_params)
+                scheduler_class = getattr(lr_sched, scheduler_name)
+                scheduler = scheduler_class(optimizer, **scheduler_params)
 
-        # -----------------------------
-        # STORE RESULTS for this strategy
-        # -----------------------------
-        result[sparsity] = {
-                "Optimizer": optimizer,
-                "Epochs": epochs,
-                "Scheduler": scheduler,
-            }
+            # -----------------------------
+            # STORE RESULTS for this strategy
+            # -----------------------------
+            result[sparsity] = {
+                    "Optimizer": optimizer,
+                    "Epochs": epochs,
+                    "Scheduler": scheduler,
+                }
     return result
 
 
@@ -986,6 +1006,7 @@ def set_backbone_eval_bn_dropout(model):
         if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.Dropout)):
             m.eval()
 
+
 def ft_one_epoch(net, trainloader, optimizer, criterion, epoch, device, strategy):
     print(f'\nEpoch: {epoch}')
     running_loss = 0.0
@@ -1042,6 +1063,93 @@ def ft_one_epoch(net, trainloader, optimizer, criterion, epoch, device, strategy
             }
 
 
+def sanity_check_finetune(model, ckpt_path, strategy, device='cuda', train_distill_head=False):
+    """
+    Compare fine-tuned model against original checkpoint.
+    Supports ResNet (.fc), VGG (.classifier), and DeiT (.head / .head_dist).
+    """
+    original_state = torch.load(ckpt_path, map_location=device)
+    current_state = model.state_dict()
+
+    changed = []
+    unchanged = []
+
+    for name, param in current_state.items():
+        original_param = original_state[name]
+        if torch.equal(param, original_param):
+            unchanged.append(name)
+        else:
+            changed.append(name)
+
+    # Identify classifier head parameter names
+    if hasattr(model, "fc") and isinstance(model.fc, nn.Linear):
+        head_names = {name for name in current_state if name.startswith("fc.")}
+    elif hasattr(model, "classifier") and isinstance(model.classifier, nn.Sequential):
+        last_idx = len(model.classifier) - 1
+        head_names = {name for name in current_state if name.startswith(f"classifier.{last_idx}.")}
+    elif hasattr(model, "head") and isinstance(model.head, nn.Linear):
+        head_names = {name for name in current_state if name.startswith("head.")}
+        if train_distill_head and hasattr(model, "head_dist") and isinstance(model.head_dist, nn.Linear):
+            head_names |= {name for name in current_state if name.startswith("head_dist.")}
+    else:
+        raise ValueError("Model does not have a supported classifier head (.fc, .classifier[-1], or .head).")
+
+    backbone_names = set(current_state.keys()) - head_names
+
+    print(f"\n{'='*50}")
+    print(f"  Sanity Check: {strategy}")
+    print(f"{'='*50}")
+    print(f"  Total parameters:   {len(current_state)}")
+    print(f"  Changed:            {len(changed)}")
+    print(f"  Unchanged:          {len(unchanged)}")
+
+    passed = True
+
+    if strategy == "FT-LL":
+        backbone_changed = [n for n in changed if n in backbone_names]
+        head_unchanged = [n for n in unchanged if n in head_names]
+
+        if backbone_changed:
+            print(f"\n  [FAIL] Backbone layers changed (should be frozen):")
+            for n in backbone_changed:
+                print(f"         - {n}")
+            passed = False
+
+        if head_unchanged:
+            print(f"\n  [FAIL] Head layers unchanged (should be updated):")
+            for n in head_unchanged:
+                print(f"         - {n}")
+            passed = False
+
+    elif strategy == "FT-AL":
+        if not any(n in backbone_names for n in changed):
+            print(f"\n  [FAIL] No backbone layers changed (all should be trainable)")
+            passed = False
+        if not any(n in head_names for n in changed):
+            print(f"\n  [FAIL] Head layers unchanged (should be updated)")
+            passed = False
+
+    elif strategy == "RT-AL":
+        if not any(n in head_names for n in changed):
+            print(f"\n  [FAIL] Head layers unchanged (should be reinitialized and updated)")
+            passed = False
+        if not any(n in backbone_names for n in changed):
+            print(f"\n  [FAIL] No backbone layers changed (all should be trainable)")
+            passed = False
+
+    if passed:
+        print(f"\n  [PASS] All layers behaved as expected for {strategy}")
+
+    print(f"\n  Changed layers:")
+    for n in changed:
+        tag = "(head)" if n in head_names else "(backbone)"
+        print(f"    - {n} {tag}")
+
+    print(f"{'='*50}\n")
+    return passed
+
+
+
 def prune_model_global(model, amount):
     """
     Global unstructured pruning (magnitude-based).
@@ -1050,6 +1158,8 @@ def prune_model_global(model, amount):
     # Gather all parameters to prune
     parameters_to_prune = []
     for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d) and "patch_embed" in name:
+            continue  # skip patch embedding
         if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
             parameters_to_prune.append((module, 'weight'))
 
@@ -1067,28 +1177,29 @@ def prune_model_global(model, amount):
     return model
 
 
-def check_pruned_weights(model):
+def check_pruned_weights(model, exclude_patterns=None):
     """
     Inspect the sparsity (percentage of zero weights) in each pruned layer.
     Also prints global sparsity across the entire model.
+    
+    exclude_patterns: list of name substrings to skip (e.g., ["patch_embed"])
     """
+    if exclude_patterns is None:
+        exclude_patterns = []
+
     total_weights = 0
     total_zero = 0
 
     print("\n=== PRUNING CHECKER ===")
     for name, module in model.named_modules():
-
-        # Only examine Conv2d and Linear layers (pruned layers)
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+        if isinstance(module, (nn.Conv2d, nn.Linear)):
+            if any(pat in name for pat in exclude_patterns):
+                continue
             if hasattr(module, "weight"):
                 w = module.weight.data.cpu().numpy()
                 num_total = w.size
                 num_zero = (w == 0).sum()
-
                 layer_sparsity = num_zero / num_total * 100
-
-                #print(f"{name}.weight: zero = {num_zero}/{num_total}  "
-                #      f"({layer_sparsity:.2f}% sparsity)")
 
                 total_weights += num_total
                 total_zero += num_zero
@@ -1349,23 +1460,26 @@ def create_or_load_subset_from_group(
     return subset
 
 
-
 def create_or_load_group_B(
-    save_dir=None,
-    overlap_rate=None,
-    group_A_indices=None,
-    dataset=None,
-    group_size=25000,
+    save_dir,
+    overlap_rate,
+    group_A_indices,
+    dataset,
+    group_size=10000,
     num_classes=10,
     seed=42,
     force_rebuild=False
 ):
     overlap_rate = round(overlap_rate, 2)
-    save_path = Path(save_dir+f"/group_B_{group_size}_{overlap_rate}_seed{seed}.npy")
+    
+    # Ensure save directory exists
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    A_size = len(group_A_indices)
+    save_path = Path(save_dir) / f"group_B_{A_size}_{overlap_rate}_{group_size}_seed{seed}.npy"
 
     if save_path.exists() and not force_rebuild:
         print(f"[INFO] Loading Group B from {save_path}")
-        return load_indices(save_path)
+        return np.load(save_path) # Assuming you use np.save/np.load
 
     print(f"[INFO] Creating Group B (overlap={overlap_rate})")
 
@@ -1374,25 +1488,40 @@ def create_or_load_group_B(
     K_c = int(n_per_class * overlap_rate)
     U_c = n_per_class - K_c
 
-    # organize A indices by class
+    # --- THE FIX: Extract all labels once without loading images ---
+    # Check common attribute names for labels (torchvision uses .targets, custom often uses .Y)
+    if hasattr(dataset, 'targets'):
+        all_labels = dataset.targets
+    elif hasattr(dataset, 'Y'):
+        all_labels = dataset.Y
+    else:
+        raise AttributeError("Could not find labels array in dataset. Look for .targets or .Y")
+
+    # Organize A indices by class
     A_by_class = {c: [] for c in range(num_classes)}
     for idx in group_A_indices:
-        _, y = dataset[idx]
+        y = int(all_labels[idx])
         A_by_class[y].append(idx)
 
-    # organize non-A indices by class
+    # Organize non-A indices by class
     nonA_by_class = {c: [] for c in range(num_classes)}
     A_set = set(group_A_indices)
 
-    for idx, (_, y) in enumerate(dataset):
+    for idx, y in enumerate(all_labels):
         if idx not in A_set:
-            nonA_by_class[y].append(idx)
+            nonA_by_class[int(y)].append(idx)
 
     group_B = []
 
     for c in range(num_classes):
         A_candidates = np.array(A_by_class[c])
         nonA_candidates = np.array(nonA_by_class[c])
+
+        # Add safe-checks in case we ask for more data than exists
+        if len(A_candidates) < K_c:
+            raise ValueError(f"Not enough overlap samples in class {c}. Have {len(A_candidates)}, need {K_c}")
+        if len(nonA_candidates) < U_c:
+            raise ValueError(f"Not enough unique samples in class {c}. Have {len(nonA_candidates)}, need {U_c}")
 
         rng.shuffle(A_candidates)
         rng.shuffle(nonA_candidates)
@@ -1403,9 +1532,13 @@ def create_or_load_group_B(
         group_B.extend(overlap)
         group_B.extend(unique_B)
 
+    # Final shuffle so classes aren't clustered together in the dataloader
+    group_B = np.array(group_B)
     rng.shuffle(group_B)
-    save_indices(group_B, save_path)
+    
+    np.save(save_path, group_B)
     return group_B
+
 
 def create_or_load_group_B_superset(
     dataset,
@@ -1564,39 +1697,25 @@ def load_pickel_dataset(pkl_path):
     return X, Y
 
 
-def extract_ft_balanced_train_val(
-    X,
+def extract_ft_balanced_train_val_indices(
     Y,
-    total_size,
+    split_size, # Renamed from total_size for clarity
     seed=42
 ):
     """
-    Extract two disjoint class-balanced subsets (train, val) from (X, Y),
-    each of size `total_size`.
-
-    Args:
-        X (np.ndarray): shape (N, H, W, C)
-        Y (np.ndarray): shape (N,)
-        total_size (int): total samples for train, and total samples for val (same size)
-        seed (int): random seed for reproducibility
-        strict_no_overlap (bool): if True, raise if not enough samples to make disjoint splits
-
+    Generate disjoint class-balanced subset indices for train and val.
     Returns:
-        (X_train, Y_train), (X_val, Y_val), (train_idx, val_idx)
+        train_idx (np.ndarray), val_idx (np.ndarray)
     """
     rng = np.random.default_rng(seed)
-
     Y = np.asarray(Y)
     classes = np.unique(Y)
     num_classes = len(classes)
 
-    if total_size % num_classes != 0:
-        raise ValueError(
-            f"total_size={total_size} not divisible by num_classes={num_classes}"
-        )
+    if split_size % num_classes != 0:
+        raise ValueError(f"split_size={split_size} not divisible by num_classes={num_classes}")
 
-    per_class = total_size // num_classes
-
+    per_class = split_size // num_classes
     train_idx = []
     val_idx = []
 
@@ -1606,17 +1725,11 @@ def extract_ft_balanced_train_val(
 
         needed = 2 * per_class
         if len(idx_c) < needed:
-            raise ValueError(
-                f"Class {c} has only {len(idx_c)} samples; need {needed} "
-                f"to build disjoint train+val (each {per_class})."
-            )
+            raise ValueError(f"Class {c} has only {len(idx_c)} samples; need {needed}.")
             
-        else:
-            train_take = idx_c[:per_class]
-            val_take = idx_c[per_class:per_class + per_class]
-
-        train_idx.append(train_take)
-        val_idx.append(val_take)
+        # We only care about the indices!
+        train_idx.append(idx_c[:per_class])
+        val_idx.append(idx_c[per_class:needed])
 
     train_idx = np.concatenate(train_idx)
     val_idx = np.concatenate(val_idx)
@@ -1624,10 +1737,9 @@ def extract_ft_balanced_train_val(
     rng.shuffle(train_idx)
     rng.shuffle(val_idx)
 
-    X_train, Y_train = X[train_idx], Y[train_idx]
-    X_val, Y_val = X[val_idx], Y[val_idx]
+    # Return ONLY the indices
+    return train_idx, val_idx
 
-    return (X_train, Y_train), (X_val, Y_val), (train_idx, val_idx)
 
 import os
 import re
@@ -2212,7 +2324,6 @@ def setup_finetune_deit(
     strategy:
       - 'FT-LL': freeze backbone, train head(s) only
       - 'FT-AL': train all params
-      - 'RT-AL': replace+reinit head(s), train all params
 
     train_distill_head:
       - False: only train model.head
@@ -2231,20 +2342,7 @@ def setup_finetune_deit(
 
     embed_dim = model.head.in_features
 
-    # ---- replace heads if class count mismatched (or if reinit requested) ----
-    def replace_head_modules():
-        # Replace class head
-        model.head = nn.Linear(embed_dim, num_classes).to(device)
-        _reinit_linear(model.head)
-
-        # Replace distillation head only if present (and either we plan to train/use it OR want consistency)
-        if has_dist:
-            model.head_dist = nn.Linear(embed_dim, num_classes).to(device)
-            _reinit_linear(model.head_dist)
-
     out_features = model.head.out_features
-    if (num_classes != out_features) or (strategy == "RT-AL") or reinit_head:
-        replace_head_modules()
 
     # ---- apply strategy ----
     if strategy == "FT-LL":
@@ -2267,11 +2365,6 @@ def setup_finetune_deit(
 
         # optional: if you explicitly DON'T want to train distill head even in FT-AL
         # you can freeze it here, but usually for FT-AL you keep all trainable.
-
-    elif strategy == "RT-AL":
-        # already replaced+reinit above; now train all
-        for p in model.parameters():
-            p.requires_grad = True
 
     else:
         raise ValueError(f"Unknown fine-tuning strategy: {strategy}")

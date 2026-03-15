@@ -230,7 +230,7 @@ def main_deit(seed, r, yaml_file_path): # this function is used to calculate the
                 worker_init_fn=seed_worker,generator=g, persistent_workers=True, 
                 pin_memory=True)
 
-    log_dir = './saved_logs/vanilla/MI'
+    log_dir = './saved_logs/vanilla/MI/DeiT/'
     os.makedirs(log_dir, exist_ok=True)
     log_name = model_name
     log_file = os.path.join(log_dir, f"training_log_{log_name}_MI.csv")
@@ -419,20 +419,22 @@ if __name__ == "__main__":
     for yaml_path in yaml_files:
         print(f"\n========== Starting experiments from {yaml_path} ==========")
             
-        '''for seed in range(42, 52): # entry point for main_nega
+        for seed in range(43, 52): # entry point for main_nega
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
 
-            for frac in np.arange(0.0, 1.1, 0.1):
-                main_nega(seed, frac, yaml_path)
-            #main_deit(seed, 1.0, yaml_path)'''
+            main_deit(seed, 1.0, yaml_path)
+
+            #for frac in np.arange(0.0, 1.1, 0.1):
+                #main_nega(seed, frac, yaml_path)
+                
         
-        for seed in range(42, 52): # entry point for main_nega_10000
+        '''for seed in range(42, 52): # entry point for main_nega_10000
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")
             set_seed(seed)
 
             for frac in np.arange(0.0, 1.1, 0.1):
-                main_nega_10000(seed, frac, yaml_path)
+                main_nega_10000(seed, frac, yaml_path)'''
             
         '''for seed in range(42, 52): # entry point for main_nega
             print(f"\n>>> Running seed {seed} for {os.path.basename(yaml_path)}")

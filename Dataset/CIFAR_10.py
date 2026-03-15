@@ -264,6 +264,9 @@ class CIFAR10PseudoLabelDataset(CIFAR10Dataset):
     """
     CIFAR-10 wrapper for pseudo-labeled numpy data that matches CIFAR10Dataset interface.
 
+    Train Attribute (train_set): 500,000 images (Scraped from 80M Tiny Images and labeled by a teacher model).
+    Test Attribute (test_set): Does not exist (Size: 0).
+    
     Workflow:
       ds = CIFAR10PseudoLabelDataset(...)
       ds.set_data(X, Y)  # builds train_set + in_sample_set (clean probing)
@@ -325,5 +328,93 @@ class CIFAR10PseudoLabelDataset(CIFAR10Dataset):
 
 
 
+from datasets import load_dataset
+from PIL import Image
+
+class HFImageDataset(Dataset):
+    """
+    A PyTorch Dataset wrapper for Hugging Face datasets.
+    Extracts the PIL image and label, forces a resize to match CIFAR-10, 
+    and applies your YAML transform pipeline.
+    """
+    def __init__(self, hf_dataset, transform=None, force_size=32):
+        self.hf_dataset = hf_dataset
+        self.transform = transform
+        self.force_size = force_size
+
+    def __len__(self):
+        return len(self.hf_dataset)
+
+    def __getitem__(self, idx):
+        # Hugging Face yields dictionaries
+        item = self.hf_dataset[idx]
+        
+        # Dynamically handle the column name (usually 'img' for CIFAR)
+        img_key = 'img' if 'img' in item else 'image'
+        
+        # Ensure it's a 3-channel RGB PIL Image
+        img = item[img_key].convert("RGB")
+        label = int(item['label'])
+
+        # Force resize from CIFARNet (64x64) down to CIFAR-10 (32x32)
+        if self.force_size and img.size != (self.force_size, self.force_size):
+            img = img.resize((self.force_size, self.force_size), Image.BILINEAR)
+
+        # Apply your parent class's transform pipeline
+        if self.transform is not None:
+            img = self.transform(img)
+
+        return img, label
 
 
+class CIFARNetDataset(CIFAR10Dataset):
+    """
+    CIFAR-10 wrapper for the Hugging Face CIFARNet (ImageNet-derived) dataset.
+    Perfect for Out-of-Distribution (OOD) Model Stealing.
+
+    Train Attribute (train_set): 190,000 images (Sampled from ImageNet).
+    Test Attribute (test_set): 10,000 images.
+    
+    """
+    def __init__(
+        self,
+        normalization: str = "cifar10",  # Keep CIFAR-10 stats for the victim model!
+        img_size: int = 32,
+        train_transforms: Optional[List[Dict[str, Any]]] = None,
+        test_transforms: Optional[List[Dict[str, Any]]] = None,
+    ):
+        # 1. Initialize parent, skip torchvision building
+        super().__init__(
+            normalization=normalization,
+            loading="custom",
+            root_dir="./data",
+            img_size=img_size,
+            train_transforms=train_transforms,
+            test_transforms=test_transforms,
+            build_dataset=False,
+            download=False,
+        )
+
+        # 2. Download/Load the Hugging Face dataset automatically
+        print("[INFO] Loading CIFARNet from Hugging Face...")
+        hf_data = load_dataset("EleutherAI/cifarnet")
+
+        # 3. Build internal sets using the HF wrapper
+        # We pass self.img_size to ensure the 64->32 downsampling happens
+        self.train_set = HFImageDataset(
+            hf_data['train'], 
+            transform=self.train_transform, 
+            force_size=self.img_size
+        ) # size - 190000
+        
+        self.test_set = HFImageDataset(
+            hf_data['test'], 
+            transform=self.test_transform, 
+            force_size=self.img_size
+        ) # size - 10000
+        
+        self.in_sample_set = HFImageDataset(
+            hf_data['train'], 
+            transform=self.test_transform, 
+            force_size=self.img_size
+        )
